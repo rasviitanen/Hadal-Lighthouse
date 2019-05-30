@@ -5,10 +5,10 @@ COPY . .
 
 RUN cargo install --path .
 
-ENV http_proxy host:port
-ENV https_proxy host:port
+ENV http_proxy 0.0.0.0:3003
+ENV https_proxy 0.0.0.0:3003
 
 EXPOSE 3003
 
-CMD ["rustysignal", "127.0.0.1:3003"]
+CMD ["rustysignal", "0.0.0.0:3003"]
 
