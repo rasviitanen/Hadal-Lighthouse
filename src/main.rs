@@ -20,6 +20,8 @@ mod server;
 mod node;
 mod network;
 
+mod room;
+
 fn main() {
     server::run()
 }

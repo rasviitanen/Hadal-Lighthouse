@@ -65,40 +65,7 @@ impl Server {
         };
     }
 
-}
-
-impl Handler for Server {
-    fn on_open(&mut self, handshake: Handshake) -> Result<()> {
-        // Get the aruments from a URL
-        // i.e localhost:8000/user=testuser
-        let url_arguments = handshake.request.resource()[2..].split("=");
-        // Beeing greedy by not collecting pairs
-        // Instead every even number (including 0) will be an identifier
-        // and every odd number will be the assigned value
-        let argument_vector: Vec<&str> = url_arguments.collect();
-
-        if argument_vector[0] == "user" {
-            let username: &str = argument_vector[1]; // This can panic
-            self.network.borrow_mut().add_user(username, &self.node);
-        }
-
-        println!("Network expanded to {:?} connected nodes", self.network.borrow().size());
-        Ok(())
-    }
-
-    #[cfg(feature = "ssl")]       
-    fn upgrade_ssl_server(&mut self, sock: TcpStream) -> ws::Result<SslStream<TcpStream>> {
-        println!("Server node upgraded");
-        // TODO  This is weird, but the sleep is needed...
-        sleep(Duration::from_millis(200));
-        self.ssl.accept(sock).map_err(From::from)
-    }
-
-    fn on_message(&mut self, msg: Message) -> Result<()> {
-        let text_message: &str = msg.as_text()?;
-        let json_message: Value = 
-            serde_json::from_str(text_message).unwrap_or(Value::default());
-
+    fn handle_connection_request(&self, json_message: &Value, text_message: &str) -> Result<()> {
         // !!! WARNING !!!
         // The word "protocol" match is protcol specific.
         // Thus a client should make sure to send a viable protocol
@@ -116,6 +83,32 @@ impl Handler for Server {
             },
             Some("one-to-self") => {
                 self.node.borrow().sender.send(text_message)
+            },
+            Some("one-to-room") => {
+                match json_message["room"].as_str() {
+                    Some(room_name) => {
+                        let network = self.network.borrow();
+                        network.rooms.borrow().get(room_name).map(|room| { 
+                            // Send the message to everyone in the room
+                            for node in room.nodes.borrow().iter() {
+                                node.upgrade().map(|upgraded_node| {
+                                    if let Some(owner) = upgraded_node.borrow().owner.as_ref() {
+                                        let from = json_message["from"].as_str();
+                                        if from != Some(owner.as_str()) {
+                                            upgraded_node.borrow().sender.send(text_message);
+                                        }
+                                    }
+                                });
+                            }
+                        });
+                        Ok(())
+                    }
+                    _ => {
+                        self.node.borrow().sender.send(
+                            "No field 'room' provided"
+                        )
+                    }
+                }
             },
             Some("one-to-one") => {
                 match json_message["endpoint"].as_str() {
@@ -141,15 +134,63 @@ impl Handler for Server {
             _ => {
                 self.node.borrow().sender.send(
                         "Invalid protocol, valid protocols include: 
+                            'one-to-self'
                             'one-to-one'
-                            'one-to-many'
+                            'one-to-room'
                             'one-to-all'"
                     )
                 }
         }
+    }
+}
+
+impl Handler for Server {
+    fn on_open(&mut self, handshake: Handshake) -> Result<()> {
+        // Get the aruments from a URL
+        // i.e localhost:8000/user=testuser
+        let url_arguments : Vec<&str> = handshake.request.resource()[2..]
+                                .split(|c| c == '&' || c == '=').collect();
+        // Beeing greedy by not collecting pairs
+        // Instead every even number (including 0) will be an identifier
+        // and every odd number will be the assigned value
+        
+        if url_arguments[0] == "user" {
+            let username: &str = url_arguments[1]; // This can panic
+            self.network.borrow_mut().add_user(username, &self.node);
+        }
+
+
+        if url_arguments[2] == "room" {
+            // TODO  ADD ORIGIN
+            //let origin = handshake.request.origin().unwrap().unwrap();
+            let room_name = url_arguments[3]; //format!("{}/{}", origin, url_arguments[3]); // possible panic
+            self.network.borrow_mut().create_room(&room_name);
+            self.network.borrow_mut().add_user_to_room(&room_name, &self.node);
+        }
+
+        println!("Network expanded to {:?} connected nodes", self.network.borrow().size());
+        Ok(())
+    }
+
+    #[cfg(feature = "ssl")]       
+    fn upgrade_ssl_server(&mut self, sock: TcpStream) -> ws::Result<SslStream<TcpStream>> {
+        println!("Server node upgraded");
+        // TODO  This is weird, but the sleep is needed...
+        sleep(Duration::from_millis(200));
+        self.ssl.accept(sock).map_err(From::from)
+    }
+
+    fn on_message(&mut self, msg: Message) -> Result<()> {
+        let text_message: &str = msg.as_text()?;
+        let json_message: Value = 
+            serde_json::from_str(text_message).unwrap_or(Value::default());
      
+        // Use chain of responsibility to handle the requests
         #[cfg(feature = "push")]
-        self.handle_push_requests(&json_message);   
+        self.handle_push_requests(&json_message);
+
+        self.handle_connection_request(&json_message, &text_message)
+
     }
 
     fn on_close(&mut self, code: CloseCode, reason: &str) {
