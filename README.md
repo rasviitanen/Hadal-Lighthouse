@@ -1,8 +1,5 @@
 # Shoal Signal
-
-> :warning: This signaling server will be replaced with a more tailored solution in the future.
-
-Shoal Signal enables peer discovery
+Shoal Signal enables peer discovery for peers connected to the shoal network.
 
 # Run directly
 ```
